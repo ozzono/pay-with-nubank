@@ -11,8 +11,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/ozzono/normalize"
-
 	adb "github.com/ozzono/adbtools"
 	comgas "github.com/ozzono/comgas_invoice"
 	enel "github.com/ozzono/enel_invoice"
@@ -110,7 +108,7 @@ func (c *config) adbFlow(invoices []invoice) error {
 	if err != nil {
 		return fmt.Errorf("StartApp err: %v", err)
 	}
-	err = c.waitInScreen("Olá", 10)
+	err = c.device.WaitInScreen("Olá", 10)
 	if err != nil {
 		return err
 	}
@@ -262,27 +260,8 @@ func (c *config) coordsFromExp(exp string) ([2]int, error) {
 	return coords, nil
 }
 
-func (c *config) hasInScreen(want string, newDump bool) bool {
-	return strings.Contains(strings.ToLower(normalize.Norm(c.device.XMLScreen(newDump))), strings.ToLower(normalize.Norm(want)))
-}
-
 func sleep(delay int) {
 	time.Sleep(time.Duration(delay*defaultSleep) * time.Millisecond)
-}
-
-func (c *config) waitInScreen(want string, retryCount int) error {
-	for !c.hasInScreen(want, true) {
-		log.Println("Waiting app load")
-		sleep(10)
-		if c.hasInScreen(want, true) {
-			break
-		}
-		if retryCount == 0 {
-			return fmt.Errorf("Reached max retry count of %d", retryCount)
-		}
-		retryCount--
-	}
-	return nil
 }
 
 func matchExp(exp, text string) []string {
