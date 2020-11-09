@@ -7,7 +7,7 @@ import (
 )
 
 func TestFlow(t *testing.T) {
-	config, err := readFile("config.json")
+	config, err := readFile("config_test.json")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -15,7 +15,7 @@ func TestFlow(t *testing.T) {
 		BarCode: config["BarCode"],
 		Value:   config["Value"],
 		DueDate: config["DueDate"],
-	})
+	}, config["appPW"])
 	if err != nil {
 		t.Fatal(err)
 	}

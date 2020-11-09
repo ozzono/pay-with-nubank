@@ -29,27 +29,33 @@ type app struct {
 type Flow struct {
 	device  adb.Device
 	Invoice Invoice
+	appPW   string
 }
 
 // Invoice has all the payment needed data
 type Invoice struct {
-	DueDate string
-	Value   string
-	BarCode string
-	Status  string
+	DueDate  string
+	Value    string
+	BarCode  string
+	Status   string
+	Provider string
 }
 
 // NewFlow creates the needed flow allowing the payment
-func NewFlow(invoice Invoice) (Flow, error) {
+func NewFlow(invoice Invoice, appPW string) (Flow, error) {
 	devices, err := adb.Devices(true)
 	if err != nil {
 		return Flow{}, err
+	}
+	if len(appPW) == 0 {
+		return Flow{}, fmt.Errorf("password cannot be empty")
 	}
 	for i := range devices {
 		if !strings.Contains(devices[i].ID, "emulator") {
 			return Flow{
 				device:  devices[i],
 				Invoice: invoice,
+				appPW:   appPW,
 			}, nil
 		}
 	}
@@ -89,8 +95,8 @@ func (flow *Flow) PayInvoice() error {
 		return fmt.Errorf("failed to start %s", nubank.pkg)
 	}
 
-	for err := flow.device.WaitInScreen(len(expList())/3, "Pagar"); err != nil; {
-		for _, item := range expList() {
+	for err := flow.device.WaitInScreen(len(menuList())/3, "Pagar"); err != nil; {
+		for _, item := range menuList() {
 			screen, err := flow.device.XMLScreen(true)
 			if err != nil {
 				return err
@@ -108,7 +114,7 @@ func (flow *Flow) PayInvoice() error {
 		return fmt.Errorf("unable to find invoice payment button")
 	}
 
-	err = flow.device.Exp2Tap(expList()["pagar-btn"])
+	err = flow.device.Exp2Tap(menuList()["pagar-btn"])
 	if err != nil {
 		return err
 	}
@@ -118,7 +124,51 @@ func (flow *Flow) PayInvoice() error {
 		return err
 	}
 
-	err = flow.device.Exp2Tap(expList()["pay-invoice"])
+	err = flow.payFlow()
+	if err != nil {
+		return err
+	}
+
+	today := time.Now()
+	todayDay := fmt.Sprintf("%d/%d/%d", int(today.Day()), int(today.Month()), int(today.Year()))
+	if flow.Invoice.DueDate != todayDay {
+		err = flow.dateInput(flow.Invoice.DueDate)
+		if err != nil {
+			return err
+		}
+	}
+
+	err = flow.device.Exp2Tap(expList()["confirm"])
+	if err != nil {
+		return err
+	}
+
+	if err := flow.device.WaitInScreen(10, "Digite sua senha de 4 dígitos"); err != nil {
+		return err
+	}
+
+	err = flow.device.InputText(flow.appPW, false)
+	if err != nil {
+		return err
+	}
+
+	if err := flow.device.WaitInScreen(10, "Pagamento agendado", "Pagamento&#10;agendado"); err != nil {
+		log.Println(err)
+	} else {
+		log.Printf("successfully paid %s invoice", flow.Invoice.Provider)
+	}
+
+	if flow.device.HasInScreen(false, "Você acabou realizar essa operação") {
+		return fmt.Errorf("cannot certify the invoice payment, try again in a few minutes")
+	}
+
+	return nil
+}
+
+func (flow *Flow) payFlow() error {
+	log.Println("starting pay flow")
+
+	err := flow.device.Exp2Tap(expList()["pay-invoice"])
 	if err != nil {
 		return err
 	}
@@ -134,12 +184,6 @@ func (flow *Flow) PayInvoice() error {
 	}
 	time.Sleep(time.Duration(flow.device.DefaultSleep*30) * time.Millisecond)
 
-	barcode := []string{}
-	for _, item := range strings.Split(flow.Invoice.BarCode, ".") {
-		for _, innerItem := range strings.Split(item, " ") {
-			barcode = append(barcode, innerItem)
-		}
-	}
 	err = flow.device.InputText(flow.Invoice.BarCode, true)
 	if err != nil {
 		return err
@@ -164,15 +208,7 @@ func (flow *Flow) PayInvoice() error {
 	}
 
 	time.Sleep(1 * time.Second)
-	invoiceDay := strings.Split(flow.Invoice.DueDate, "/")[0]
-	todayDay := fmt.Sprintf("%d", int(time.Now().Day()))
-	if invoiceDay != todayDay {
-		err = flow.dateInput(flow.Invoice.DueDate)
-		if err != nil {
-			return err
-		}
-	}
-
+	log.Println("successfully ended pay flow")
 	return nil
 }
 func (flow *Flow) dateInput(date string) error {
@@ -226,6 +262,7 @@ func (flow *Flow) dateInput(date string) error {
 		return err
 	}
 
+	log.Println("successfully ended date input flow")
 	return nil
 }
 
@@ -242,6 +279,22 @@ func applyRegexp(exp, text string) []string {
 func expList() map[string]string {
 	// (\[\d+,\d+\]\[\d+,\d+\])
 	return map[string]string{
+		"pay-invoice":  "\"Contas de luz.*?(\\[\\d+,\\d+\\]\\[\\d+,\\d+\\])",
+		"insert-code":  "text=\"INSERIR CÓDIGO.*?(\\[\\d+,\\d+\\]\\[\\d+,\\d+\\])",
+		"code-input":   "código do boleto.*?(\\[\\d+,\\d+\\]\\[\\d+,\\d+\\])",
+		"continue-btn": "text=\"CONTINUAR.*?(\\[\\d+,\\d+\\]\\[\\d+,\\d+\\])",
+
+		"value":         "text=\"R..(\\d+,\\d{2})",
+		"date-btn":      "\\d{2}/\\d{2}/20\\d{2}.*?(\\[\\d+,\\d+\\]\\[\\d+,\\d+\\])",
+		"date-continue": "CONTINUAR.*?(\\[\\d+,\\d+)\\]",
+		"day":           "text=\"%s.*text=\"%s.*?(\\[\\d+,\\d+\\]\\[\\d+,\\d+\\])",
+		"confirm":       "CONFIRMAR.*?(\\[\\d+,\\d+\\]\\[\\d+,\\d+\\])",
+	}
+}
+
+func menuList() map[string]string {
+	// (\[\d+,\d+\]\[\d+,\d+\])
+	return map[string]string{
 		// list of all buttons available in the footer menu row
 		"pix":            "Pix.*?(\\[\\d+,\\d+\\]\\[\\d+,\\d+\\])",
 		"pagar-btn":      "Pagar.*?(\\[\\d+,\\d+\\]\\[\\d+,\\d+\\])",
@@ -256,16 +309,6 @@ func expList() map[string]string {
 		"cobrar":         "Cobrar.*?(\\[\\d+,\\d+\\]\\[\\d+,\\d+\\])",
 		"docao":          "Doação.*?(\\[\\d+,\\d+\\]\\[\\d+,\\d+\\])",
 		"ajuda":          "ajuda.*?(\\[\\d+,\\d+\\]\\[\\d+,\\d+\\])",
-
-		"pay-invoice":  "\"Contas de luz.*?(\\[\\d+,\\d+\\]\\[\\d+,\\d+\\])",
-		"insert-code":  "text=\"INSERIR CÓDIGO.*?(\\[\\d+,\\d+\\]\\[\\d+,\\d+\\])",
-		"code-input":   "código do boleto.*?(\\[\\d+,\\d+\\]\\[\\d+,\\d+\\])",
-		"continue-btn": "text=\"CONTINUAR.*?(\\[\\d+,\\d+\\]\\[\\d+,\\d+\\])",
-
-		"value":         "text=\"R..(\\d+,\\d{2})",
-		"date-btn":      "\\d{2}/\\d{2}/20\\d{2}.*?(\\[\\d+,\\d+\\]\\[\\d+,\\d+\\])",
-		"date-continue": "CONTINUAR.*?(\\[\\d+,\\d+)\\]",
-		"day":           "text=\"%s.*text=\"%s.*?(\\[\\d+,\\d+\\]\\[\\d+,\\d+\\])",
 	}
 }
 
